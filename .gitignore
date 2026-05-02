@@ -1,0 +1,22 @@
+# Secrets (mai committare)
+secrets.yaml
+
+# ESPHome
+.esphome/
+__pycache__/
+*.pyc
+
+# PlatformIO (usato internamente da ESPHome)
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~

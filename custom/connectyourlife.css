@@ -1,0 +1,12 @@
+/* ConnectYourLife — Branding CSS per ESPHome web_server v3 */
+
+:root {
+  --primary-color: #1a73e8;
+  --accent-color: #ff9800;
+  --text-color: #212121;
+  --bg-color: #fafafa;
+}
+
+body {
+  font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+}

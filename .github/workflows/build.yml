@@ -1,0 +1,36 @@
+name: Build ESPHome Firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create secrets.yaml for CI
+        run: |
+          cat > secrets.yaml << 'EOF'
+          wifi_ssid: "ci-placeholder"
+          wifi_password: "ci-placeholder"
+          fallback_ap_password: "ci-placeholder"
+          api_encryption_key: "dGhpcyBpcyBhIDMyIGJ5dGUga2V5IGZvciBjaSE="
+          ota_password: "ci-placeholder"
+          EOF
+
+      - name: Build strip-cob-3000k
+        uses: esphome/build-action@v4
+        with:
+          yaml-file: strip-cob-3000k.yaml
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: strip-cob-3000k-firmware
+          path: |
+            strip-cob-3000k/**/*.bin

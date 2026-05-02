@@ -1,0 +1,372 @@
+# ConnectYourLife — Parete TV (Enhanced Panel)
+# Power ON/OFF agganciati all'animazione wipe bidirezionale.
+# Preset colori, effetti fade, pannello completo.
+
+substitutions:
+  device_name: parete-tv
+  friendly_name: "Parete TV"
+  led_pin: GPIO13            # post level shifter 74AHCT125
+  num_leds: "70"             # 14 px/m × 5m
+
+packages:
+  base: !include common/base.yaml
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  on_boot:
+    priority: -100
+    then:
+      - globals.set: {id: booted, value: 'true'}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# --- Variabili globali ---
+globals:
+  - id: wipe_pos
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: wipe_direction
+    type: int
+    restore_value: no
+    initial_value: '1'          # 1 = accensione A→B, -1 = spegnimento B→A
+  - id: skip_anim
+    type: bool
+    restore_value: no
+    initial_value: 'false'      # bypassa on_turn_on durante riaccensione da wipe-off
+  - id: wipe_off_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'      # vero mentre l'animazione di spegnimento è in corso
+  - id: booted
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# --- Strip LED ---
+light:
+  - platform: neopixelbus
+    id: led_strip
+    type: WRGB               # WS2814F byte order verificato: W, R, G, B
+    variant: SK6812           # timing NRZ 800 kHz compatibile
+    pin: ${led_pin}
+    num_leds: ${num_leds}
+    method:
+      type: esp32_i2s
+      bus: 1                   # DMA puro — immune a jitter WiFi
+    name: "${friendly_name}"
+    # internal: false — esposto per color picker nativo web UI e HA
+    default_transition_length: 0s   # workaround ESPHome bug #6621
+    gamma_correct: 1.0
+    color_correct: [100%, 100%, 100%, 100%]
+
+    # Power ON → parte sempre il wipe A→B
+    on_turn_on:
+      - if:
+          condition:
+            lambda: 'return !id(skip_anim);'
+          then:
+            - globals.set:
+                id: wipe_pos
+                value: '0'
+            - globals.set:
+                id: wipe_direction
+                value: '1'
+            - light.turn_on:
+                id: led_strip
+                brightness: 100%
+                red: 0%
+                green: 0%
+                blue: 0%
+                white: 100%
+                effect: "Wipe White"
+
+    # Power OFF → parte il wipe B→A (riaccende per animare, poi si spegne)
+    on_turn_off:
+      - if:
+          condition:
+            lambda: 'return !id(wipe_off_running);'
+          then:
+            - globals.set:
+                id: wipe_off_running
+                value: 'true'
+            - globals.set:
+                id: wipe_direction
+                value: '-1'
+            - globals.set:
+                id: skip_anim
+                value: 'true'
+            - light.turn_on:
+                id: led_strip
+                effect: "Wipe White"
+            - globals.set:
+                id: skip_anim
+                value: 'false'
+          else:
+            # Chiamata interna da fine animazione → lascia spegnere
+            - globals.set:
+                id: wipe_off_running
+                value: 'false'
+
+    effects:
+      # ---- Effetti integrati ----
+      - addressable_rainbow:
+          name: "Rainbow"
+          speed: 10
+          width: 50
+
+      # ---- Effetti lambda custom ----
+      - addressable_lambda:
+          name: "Respiro Bianco"
+          update_interval: 30ms
+          lambda: |-
+            static float ph = 0.0f;
+            ph += 0.05f;
+            if (ph > 6.2832f) ph -= 6.2832f;
+            uint8_t w = (uint8_t)((sinf(ph) + 1.0f) * 127.5f);
+            for (int i = 0; i < it.size(); i++) {
+              it[i] = Color(0, 0, 0, w);
+            }
+
+      # ---- Preset colore fisso — scrittura diretta sul buffer, bypassa current_values ----
+      - addressable_lambda:
+          name: "Statico Bianco"
+          update_interval: 30ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++) it[i] = Color(0, 0, 0, 255);
+
+      - addressable_lambda:
+          name: "Statico Rosso"
+          update_interval: 30ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++) it[i] = Color(255, 0, 0, 0);
+
+      - addressable_lambda:
+          name: "Statico Verde"
+          update_interval: 30ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++) it[i] = Color(0, 255, 0, 0);
+
+      - addressable_lambda:
+          name: "Statico Blu"
+          update_interval: 30ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++) it[i] = Color(0, 0, 255, 0);
+
+      # ---- Solido: legge il colore corrente da current_values (color picker live) ----
+      - addressable_lambda:
+          name: "Solido"
+          update_interval: 30ms
+          lambda: |-
+            auto &s = id(led_strip).current_values;
+            uint8_t r = (uint8_t)(s.get_red()   * 255);
+            uint8_t g = (uint8_t)(s.get_green()  * 255);
+            uint8_t b = (uint8_t)(s.get_blue()   * 255);
+            uint8_t w = (uint8_t)(s.get_white()  * 255);
+            for (int i = 0; i < it.size(); i++) it[i] = Color(r, g, b, w);
+
+      - addressable_lambda:
+          name: "Fade Colori"
+          update_interval: 30ms
+          lambda: |-
+            static float ph = 0.0f;
+            ph += 0.025f;
+            if (ph > 6.2832f) ph -= 6.2832f;
+            uint8_t r = (uint8_t)((sinf(ph)          + 1.0f) * 127.5f);
+            uint8_t g = (uint8_t)((sinf(ph + 2.094f) + 1.0f) * 127.5f);
+            uint8_t b = (uint8_t)((sinf(ph + 4.189f) + 1.0f) * 127.5f);
+            for (int i = 0; i < it.size(); i++) {
+              it[i] = Color(r, g, b, 0);
+            }
+
+      - addressable_lambda:
+          name: "Tramonto"
+          update_interval: 40ms
+          lambda: |-
+            static float ph = 0.0f;
+            ph += 0.015f;
+            if (ph > 6.2832f) ph -= 6.2832f;
+            float t = (sinf(ph) + 1.0f) * 0.5f;
+            uint8_t r = (uint8_t)(80 + t * 175);
+            uint8_t g = (uint8_t)(t * 55);
+            uint8_t w = (uint8_t)(t * 30);
+            for (int i = 0; i < it.size(); i++) {
+              it[i] = Color(r, g, 0, w);
+            }
+
+      - addressable_lambda:
+          name: "Oceano"
+          update_interval: 30ms
+          lambda: |-
+            static float ph = 0.0f;
+            ph += 0.02f;
+            if (ph > 6.2832f) ph -= 6.2832f;
+            for (int i = 0; i < it.size(); i++) {
+              float wave = sinf(ph + (float)i * 0.3f);
+              uint8_t b = (uint8_t)((wave + 1.0f) * 100.0f + 55.0f);
+              uint8_t g = (uint8_t)((wave + 1.0f) * 40.0f);
+              it[i] = Color(0, g, b, 0);
+            }
+
+      - addressable_lambda:
+          name: "Disco"
+          update_interval: 80ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++) {
+              uint8_t r = random_uint32() & 0xFF;
+              uint8_t g = random_uint32() & 0xFF;
+              uint8_t b = random_uint32() & 0xFF;
+              it[i] = Color(r, g, b, 0);
+            }
+
+      - addressable_lambda:
+          name: "Wipe White"
+          update_interval: 30ms
+          lambda: |-
+            int pos = id(wipe_pos);
+            int dir = id(wipe_direction);
+            // wipe ON: bianco fisso; wipe OFF: colore corrente
+            Color on_color;
+            if (dir == 1) {
+              on_color = Color(0, 0, 0, 255);
+            } else {
+              // legge dal buffer pixel — non da current_values che può mescolare RGB+W
+              auto c = it[0].get();
+              on_color = Color(c.r, c.g, c.b, c.w);
+            }
+            if (initial_run) {
+              if (dir == -1 && pos == 0) {
+                id(wipe_pos) = it.size();
+                pos = it.size();
+              }
+              for (int i = 0; i < it.size(); i++) {
+                it[i] = (i < pos) ? on_color : Color(0, 0, 0, 0);
+              }
+              if (dir == 1) return;
+              // wipe OFF: inizia subito senza aspettare il prossimo frame
+            }
+            if (dir == 1) {
+              if (pos < it.size()) {
+                it[pos] = on_color;
+                id(wipe_pos) = pos + 1;
+              } else {
+                auto call = id(led_strip).turn_on();
+                call.set_effect("Statico Bianco");
+                call.perform();
+              }
+            } else {
+              if (pos > 0) {
+                id(wipe_pos) = pos - 1;
+                it[pos - 1] = Color(0, 0, 0, 0);
+              } else {
+                auto call = id(led_strip).turn_off();
+                call.perform();
+              }
+            }
+
+# --- Script toggle principale ---
+script:
+  - id: animated_toggle
+    mode: restart
+    then:
+      - if:
+          condition:
+            light.is_on: led_strip
+          then:
+            # Avvia wipe OFF direttamente (senza passare per light.turn_off)
+            - globals.set: {id: wipe_off_running, value: 'true'}
+            - globals.set: {id: wipe_direction, value: '-1'}
+            - globals.set: {id: skip_anim, value: 'true'}
+            - light.turn_on:
+                id: led_strip
+                effect: "Wipe White"
+            - globals.set: {id: skip_anim, value: 'false'}
+          else:
+            - light.turn_on:
+                id: led_strip
+                brightness: 100%
+
+# --- Sensori diagnostici ---
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
+# --- Slider luminosità ---
+number:
+  - platform: template
+    name: "Luminosità"
+    min_value: 1
+    max_value: 100
+    step: 5
+    unit_of_measurement: "%"
+    mode: slider
+    optimistic: true
+    initial_value: 100
+    on_value:
+      - if:
+          condition:
+            lambda: 'return id(booted);'
+          then:
+            - globals.set: {id: skip_anim, value: 'true'}
+            - light.turn_on:
+                id: led_strip
+                brightness: !lambda 'return x / 100.0f;'
+            - globals.set: {id: skip_anim, value: 'false'}
+
+# --- Pulsanti ---
+button:
+  - platform: restart
+    name: "Restart"
+
+  - platform: template
+    name: "Toggle Luce"
+    on_press:
+      - script.execute: animated_toggle
+
+  - platform: template
+    name: "Bianco"
+    on_press:
+      - globals.set: {id: skip_anim, value: 'true'}
+      - globals.set: {id: wipe_off_running, value: 'false'}
+      - light.turn_on:
+          id: led_strip
+          effect: "Statico Bianco"
+      - globals.set: {id: skip_anim, value: 'false'}
+
+  - platform: template
+    name: "Rosso"
+    on_press:
+      - globals.set: {id: skip_anim, value: 'true'}
+      - globals.set: {id: wipe_off_running, value: 'false'}
+      - light.turn_on:
+          id: led_strip
+          effect: "Statico Rosso"
+      - globals.set: {id: skip_anim, value: 'false'}
+
+  - platform: template
+    name: "Verde"
+    on_press:
+      - globals.set: {id: skip_anim, value: 'true'}
+      - globals.set: {id: wipe_off_running, value: 'false'}
+      - light.turn_on:
+          id: led_strip
+          effect: "Statico Verde"
+      - globals.set: {id: skip_anim, value: 'false'}
+
+  - platform: template
+    name: "Blu"
+    on_press:
+      - globals.set: {id: skip_anim, value: 'true'}
+      - globals.set: {id: wipe_off_running, value: 'false'}
+      - light.turn_on:
+          id: led_strip
+          effect: "Statico Blu"
+      - globals.set: {id: skip_anim, value: 'false'}
